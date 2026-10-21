@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M108 Bluetooth Direct Test</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
+    header { background: #1f1f1f; color: #fff; padding: 14px 16px; font-size: 18px; font-weight: 700; }
+    main { padding: 16px; max-width: 480px; margin: auto; }
+    button { width: 100%; height: 52px; border: 0; border-radius: 6px; background: #337ab7; color: #fff; font-size: 18px; font-weight: 700; margin: 8px 0; }
+    button:disabled { opacity: .4; }
+    canvas { background: #fff; width: 160px; height: 120px; border: 1px solid #ccc; display: block; margin: 8px auto; }
+    pre { background: #111; color: #9fe29f; padding: 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; min-height: 120px; }
+  </style>
+</head>
+<body>
+  <header>M108 Direct BLE Test</header>
+  <main>
+    <p>1) Ensure page is opened via <b>https://</b> in Chrome.<br>2) Unpair M108 from Android Bluetooth settings.<br>3) Tap Connect & Print.</p>
+    <button id="go">Connect & Print Test Sticker</button>
+    <canvas id="cv" width="320" height="240"></canvas>
+    <h3>Log</h3>
+    <pre id="log">Ready.</pre>
+  </main>
+  <script>
+    var $ = function(i) { return document.getElementById(i); }, ch = null, dev = null, NUM = '392013';
+    function log(m) { $('log').textContent += '\n' + m; }
+    function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+    // Draw canvas (Rotated text + QR code)
+    (function() {
+      var c = $('cv'), x = c.getContext('2d');
+      x.fillStyle = '#fff'; x.fillRect(0, 0, 320, 240); x.fillStyle = '#000';
+      try {
+        var q = qrcode(0, 'M'); q.addData(NUM); q.make();
+        var n = q.getModuleCount(), cell = Math.floor(200 / n), off = (200 - cell * n) / 2;
+        for (var r = 0; r < n; r++) {
+          for (var k = 0; k < n; k++) {
+            if (q.isDark(r, k)) x.fillRect(16 + off + k * cell, 20 + off + r * cell, cell, cell);
+          }
+        }
+      } catch(e) {
+        x.fillRect(16, 20, 200, 200);
+        log('QR library fallback active.');
+      }
+      x.save();
+      x.translate(268, 120);
+      x.rotate(Math.PI / 2);
+      x.font = '28px Arial';
+      x.textAlign = 'center';
+      x.textBaseline = 'middle';
+      ['Matthew', 'Longpine', NUM].forEach(function(t, i) {
+        x.fillText(t, 0, (i - 1) * 30);
+      });
+      x.restore();
+    })();
+
+    function buildJob() {
+      var W = 320, H = 239, bpl = 48, pad = 32;
+      var px = $('cv').getContext('2d').getImageData(0, 0, W, 240).data;
+      var ras = new Uint8Array(bpl * H);
+      for (var y = 0; y < H; y++) {
+        for (var x = 0; x < W; x++) {
+          if (px[(y * W + x) * 4] < 128) {
+            var c = x + pad;
+            ras[y * bpl + (c >> 3)] |= (0x80 >> (c & 7));
+          }
+        }
+      }
+      var head = [0x1b, 0x4e, 0x11, 0x01, 0x1f, 0x11, 0x21, 0x01, 0x1b, 0x40, 0x1d, 0x76, 0x30, 0x00, 0x30, 0x00, 0xef, 0x00];
+      var out = new Uint8Array(head.length + ras.length);
+      out.set(head);
+      out.set(ras, head.length);
+      return out;
+    }
+
+    $('go').onclick = async function() {
+      if (!navigator.bluetooth) {
+        log('Web Bluetooth requires Chrome on Android running via HTTPS.');
+        return;
+      }
+      try {
+        log('Requesting Bluetooth Device via raw BLE service filter...');
+        dev = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [0xff00, '0000ff00-0000-1000-8000-00805f9b34fb']
+        });
+
+        log('Connecting to GATT Server...');
+        var server = await dev.gatt.connect();
+
+        log('Getting Primary Service...');
+        var service = await server.getPrimaryService(0xff00);
+
+        log('Getting Characteristic (0xff02)...');
+        ch = await service.getCharacteristic(0xff02);
+
+        var job = buildJob();
+        log('Sending ' + job.length + ' bytes to M108...');
+
+        for (var i = 0; i < job.length; i += 128) {
+          var part = job.slice(i, i + 128);
+          if (ch.writeValueWithoutResponse) {
+            await ch.writeValueWithoutResponse(part);
+          } else {
+            await ch.writeValue(part);
+          }
+          await sleep(15);
+        }
+
+        log('Print complete! Check printer output.');
+      } catch (e) {
+        log('Error: ' + e.message);
+      }
+    };
+  </script>
+</body>
+</html>
