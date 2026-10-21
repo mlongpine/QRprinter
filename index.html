@@ -3,14 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>M108 Bluetooth Direct Test</title>
+  <title>M108 Direct BLE Test</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
   <style>
     body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
     header { background: #1f1f1f; color: #fff; padding: 14px 16px; font-size: 18px; font-weight: 700; }
     main { padding: 16px; max-width: 480px; margin: auto; }
     button { width: 100%; height: 52px; border: 0; border-radius: 6px; background: #337ab7; color: #fff; font-size: 18px; font-weight: 700; margin: 8px 0; }
-    button:disabled { opacity: .4; }
     canvas { background: #fff; width: 160px; height: 120px; border: 1px solid #ccc; display: block; margin: 8px auto; }
     pre { background: #111; color: #9fe29f; padding: 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; min-height: 120px; }
   </style>
@@ -18,7 +17,7 @@
 <body>
   <header>M108 Direct BLE Test</header>
   <main>
-    <p>1) Ensure page is opened via <b>https://</b> in Chrome.<br>2) Unpair M108 from Android Bluetooth settings.<br>3) Tap Connect & Print.</p>
+    <p>1) Ensure printer is turned ON with paper loaded.<br>2) Tap Connect & Print.</p>
     <button id="go">Connect & Print Test Sticker</button>
     <canvas id="cv" width="320" height="240"></canvas>
     <h3>Log</h3>
@@ -29,7 +28,7 @@
     function log(m) { $('log').textContent += '\n' + m; }
     function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-    // Draw canvas (Rotated text + QR code)
+    // Render 40x30mm Canvas
     (function() {
       var c = $('cv'), x = c.getContext('2d');
       x.fillStyle = '#fff'; x.fillRect(0, 0, 320, 240); x.fillStyle = '#000';
@@ -43,7 +42,6 @@
         }
       } catch(e) {
         x.fillRect(16, 20, 200, 200);
-        log('QR library fallback active.');
       }
       x.save();
       x.translate(268, 120);
@@ -69,10 +67,14 @@
           }
         }
       }
-      var head = [0x1b, 0x4e, 0x11, 0x01, 0x1f, 0x11, 0x21, 0x01, 0x1b, 0x40, 0x1d, 0x76, 0x30, 0x00, 0x30, 0x00, 0xef, 0x00];
-      var out = new Uint8Array(head.length + ras.length);
-      out.set(head);
+      // Header + Feed / Cut parameters
+      var head = [0x1b, 0x40, 0x1b, 0x4e, 0x11, 0x01, 0x1f, 0x11, 0x21, 0x01, 0x1d, 0x76, 0x30, 0x00, 0x30, 0x00, 0xef, 0x00];
+      var tail = [0x1b, 0x64, 0x02, 0x1d, 0x0c]; // Form Feed command
+      
+      var out = new Uint8Array(head.length + ras.length + tail.length);
+      out.set(head, 0);
       out.set(ras, head.length);
+      out.set(tail, head.length + ras.length);
       return out;
     }
 
@@ -82,7 +84,7 @@
         return;
       }
       try {
-        log('Requesting Bluetooth Device via raw BLE service filter...');
+        log('Requesting M108 Printer...');
         dev = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
           optionalServices: [0xff00, '0000ff00-0000-1000-8000-00805f9b34fb']
@@ -91,26 +93,36 @@
         log('Connecting to GATT Server...');
         var server = await dev.gatt.connect();
 
-        log('Getting Primary Service...');
+        log('Opening Service 0xff00...');
         var service = await server.getPrimaryService(0xff00);
 
-        log('Getting Characteristic (0xff02)...');
+        // Try subscribing to Flow Control (0xff03) if present
+        try {
+          var flowCh = await service.getCharacteristic(0xff03);
+          await flowCh.startNotifications();
+          log('Flow control (0xff03) initialized.');
+        } catch(fe) {
+          log('Flow control 0xff03 optional/bypassed.');
+        }
+
+        log('Getting Write Characteristic (0xff02)...');
         ch = await service.getCharacteristic(0xff02);
 
         var job = buildJob();
-        log('Sending ' + job.length + ' bytes to M108...');
+        log('Streaming ' + job.length + ' bytes (64B chunks)...');
 
-        for (var i = 0; i < job.length; i += 128) {
-          var part = job.slice(i, i + 128);
+        // Send in 64-byte chunks with 30ms throttling
+        for (var i = 0; i < job.length; i += 64) {
+          var part = job.slice(i, i + 64);
           if (ch.writeValueWithoutResponse) {
             await ch.writeValueWithoutResponse(part);
           } else {
             await ch.writeValue(part);
           }
-          await sleep(15);
+          await sleep(30);
         }
 
-        log('Print complete! Check printer output.');
+        log('Print job sent! Checking response...');
       } catch (e) {
         log('Error: ' + e.message);
       }
