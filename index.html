@@ -24,7 +24,13 @@
     <pre id="log">Ready.</pre>
   </main>
   <script>
-    var $ = function(i) { return document.getElementById(i); }, ch = null, dev = null, NUM = '392013';
+    // --- LABEL DATA VARIABLES ---
+    var firstName = 'Adelaide';
+    var lastName  = 'Longpine';
+    var qrNumber  = '443246';
+    // ----------------------------
+
+    var $ = function(i) { return document.getElementById(i); }, ch = null, dev = null;
     function log(m) { $('log').textContent += '\n' + m; }
     function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -33,7 +39,7 @@
       var c = $('cv'), x = c.getContext('2d');
       x.fillStyle = '#fff'; x.fillRect(0, 0, 320, 240); x.fillStyle = '#000';
       try {
-        var q = qrcode(0, 'M'); q.addData(NUM); q.make();
+        var q = qrcode(0, 'M'); q.addData(qrNumber); q.make();
         var n = q.getModuleCount(), cell = Math.floor(200 / n), off = (200 - cell * n) / 2;
         for (var r = 0; r < n; r++) {
           for (var k = 0; k < n; k++) {
@@ -49,7 +55,7 @@
       x.font = '28px Arial';
       x.textAlign = 'center';
       x.textBaseline = 'middle';
-      ['Matthew', 'Longpine', NUM].forEach(function(t, i) {
+      [firstName, lastName, qrNumber].forEach(function(t, i) {
         x.fillText(t, 0, (i - 1) * 30);
       });
       x.restore();
@@ -67,14 +73,12 @@
           }
         }
       }
-      // Header + Feed / Cut parameters
+      // Header only (no extra trailing form-feed bytes to avoid spitting a second blank label)
       var head = [0x1b, 0x40, 0x1b, 0x4e, 0x11, 0x01, 0x1f, 0x11, 0x21, 0x01, 0x1d, 0x76, 0x30, 0x00, 0x30, 0x00, 0xef, 0x00];
-      var tail = [0x1b, 0x64, 0x02, 0x1d, 0x0c]; // Form Feed command
       
-      var out = new Uint8Array(head.length + ras.length + tail.length);
+      var out = new Uint8Array(head.length + ras.length);
       out.set(head, 0);
       out.set(ras, head.length);
-      out.set(tail, head.length + ras.length);
       return out;
     }
 
@@ -96,7 +100,6 @@
         log('Opening Service 0xff00...');
         var service = await server.getPrimaryService(0xff00);
 
-        // Try subscribing to Flow Control (0xff03) if present
         try {
           var flowCh = await service.getCharacteristic(0xff03);
           await flowCh.startNotifications();
@@ -111,7 +114,6 @@
         var job = buildJob();
         log('Streaming ' + job.length + ' bytes (64B chunks)...');
 
-        // Send in 64-byte chunks with 30ms throttling
         for (var i = 0; i < job.length; i += 64) {
           var part = job.slice(i, i + 64);
           if (ch.writeValueWithoutResponse) {
@@ -122,7 +124,7 @@
           await sleep(30);
         }
 
-        log('Print job sent! Checking response...');
+        log('Print job sent successfully!');
       } catch (e) {
         log('Error: ' + e.message);
       }
